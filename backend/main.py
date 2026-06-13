@@ -53,7 +53,10 @@ async def inspect(
         content_b = await read_file_bytes(file_b)
         sheet_a_val: str | int = int(sheet_a) if sheet_a.isdigit() else sheet_a
         sheet_b_val: str | int = int(sheet_b) if sheet_b.isdigit() else sheet_b
-        return inspect_workbook(content_a, content_b, sheet_a_val, sheet_b_val)
+        return inspect_workbook(
+            content_a, content_b, sheet_a_val, sheet_b_val,
+            file_a.filename, file_b.filename,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -73,7 +76,14 @@ async def check_duplicates(
         sheet_a_val: str | int = int(sheet_a) if sheet_a.isdigit() else sheet_a
         sheet_b_val: str | int = int(sheet_b) if sheet_b.isdigit() else sheet_b
         return check_key_duplicates(
-            content_a, content_b, sheet_a_val, sheet_b_val, key_a, key_b
+            content_a,
+            content_b,
+            sheet_a_val,
+            sheet_b_val,
+            key_a,
+            key_b,
+            file_a.filename,
+            file_b.filename,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -87,6 +97,8 @@ async def sync(
 ):
     try:
         cfg = parse_config(config)
+        cfg["filename_a"] = file_a.filename
+        cfg["filename_b"] = file_b.filename
         content_a = await read_file_bytes(file_a)
         content_b = await read_file_bytes(file_b)
         excel_bytes, warnings = sync_excel(content_a, content_b, cfg)

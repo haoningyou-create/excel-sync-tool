@@ -16,17 +16,38 @@ async def read_file_bytes(file: UploadFile) -> bytes:
     return await file.read()
 
 
-def get_sheet_names(content: bytes) -> list[str]:
-    xl = pd.ExcelFile(BytesIO(content))
+def detect_excel_engine(content: bytes, filename: str | None = None) -> str:
+    """根据文件名或文件头判断 .xlsx（openpyxl）或 .xls（xlrd）。"""
+    if filename:
+        lower = filename.lower()
+        if lower.endswith(".xls") and not lower.endswith(".xlsx"):
+            return "xlrd"
+        if lower.endswith((".xlsx", ".xlsm")):
+            return "openpyxl"
+    if content[:2] == b"PK":
+        return "openpyxl"
+    if len(content) >= 8 and content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "xlrd"
+    return "openpyxl"
+
+
+def get_sheet_names(content: bytes, filename: str | None = None) -> list[str]:
+    engine = detect_excel_engine(content, filename)
+    xl = pd.ExcelFile(BytesIO(content), engine=engine)
     return xl.sheet_names
 
 
-def read_dataframe(content: bytes, sheet_name: str | int) -> pd.DataFrame:
-    return pd.read_excel(BytesIO(content), sheet_name=sheet_name, engine="openpyxl")
+def read_dataframe(
+    content: bytes, sheet_name: str | int, filename: str | None = None
+) -> pd.DataFrame:
+    engine = detect_excel_engine(content, filename)
+    return pd.read_excel(BytesIO(content), sheet_name=sheet_name, engine=engine)
 
 
-def get_headers(content: bytes, sheet_name: str | int) -> list[str]:
-    df = read_dataframe(content, sheet_name)
+def get_headers(
+    content: bytes, sheet_name: str | int, filename: str | None = None
+) -> list[str]:
+    df = read_dataframe(content, sheet_name, filename)
     return [str(col) for col in df.columns.tolist()]
 
 
@@ -56,11 +77,13 @@ def inspect_workbook(
     content_b: bytes,
     sheet_a: str | int = 0,
     sheet_b: str | int = 0,
+    filename_a: str | None = None,
+    filename_b: str | None = None,
 ) -> dict[str, Any]:
-    sheets_a = get_sheet_names(content_a)
-    sheets_b = get_sheet_names(content_b)
-    headers_a = get_headers(content_a, sheet_a)
-    headers_b = get_headers(content_b, sheet_b)
+    sheets_a = get_sheet_names(content_a, filename_a)
+    sheets_b = get_sheet_names(content_b, filename_b)
+    headers_a = get_headers(content_a, sheet_a, filename_a)
+    headers_b = get_headers(content_b, sheet_b, filename_b)
 
     key_a, key_b = suggest_key_pair(headers_a, headers_b)
     column_mapping = suggest_column_mapping(
@@ -87,9 +110,11 @@ def check_key_duplicates(
     sheet_b: str | int,
     key_a: str,
     key_b: str,
+    filename_a: str | None = None,
+    filename_b: str | None = None,
 ) -> dict[str, Any]:
-    df_a = read_dataframe(content_a, sheet_a)
-    df_b = read_dataframe(content_b, sheet_b)
+    df_a = read_dataframe(content_a, sheet_a, filename_a)
+    df_b = read_dataframe(content_b, sheet_b, filename_b)
 
     dup_a = find_duplicate_keys(df_a, key_a)
     dup_b = find_duplicate_keys(df_b, key_b)
@@ -121,18 +146,27 @@ def sync_excel(
     sheet_b = config.get("sheet_b", 0)
     key_a = config["key_a"]
     key_b = config["key_b"]
+    filename_a = config.get("filename_a")
+    filename_b = config.get("filename_b")
     column_mapping = sanitize_column_mapping(
         config.get("column_mapping", {}),
         key_a,
         key_b,
     )
 
-    df_a = read_dataframe(content_a, sheet_a)
-    df_b = read_dataframe(content_b, sheet_b)
+    df_a = read_dataframe(content_a, sheet_a, filename_a)
+    df_b = read_dataframe(content_b, sheet_b, filename_b)
 
     warnings: list[str] = []
     dup_info = check_key_duplicates(
-        content_a, content_b, sheet_a, sheet_b, key_a, key_b
+        content_a,
+        content_b,
+        sheet_a,
+        sheet_b,
+        key_a,
+        key_b,
+        filename_a,
+        filename_b,
     )
     warnings.extend(dup_info["warnings"])
 
