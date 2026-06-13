@@ -1,0 +1,202 @@
+import json
+from io import BytesIO
+from typing import Any
+
+import pandas as pd
+from fastapi import UploadFile
+
+from services.matching import (
+    sanitize_column_mapping,
+    suggest_column_mapping,
+    suggest_key_pair,
+)
+
+
+async def read_file_bytes(file: UploadFile) -> bytes:
+    return await file.read()
+
+
+def get_sheet_names(content: bytes) -> list[str]:
+    xl = pd.ExcelFile(BytesIO(content))
+    return xl.sheet_names
+
+
+def read_dataframe(content: bytes, sheet_name: str | int) -> pd.DataFrame:
+    return pd.read_excel(BytesIO(content), sheet_name=sheet_name, engine="openpyxl")
+
+
+def get_headers(content: bytes, sheet_name: str | int) -> list[str]:
+    df = read_dataframe(content, sheet_name)
+    return [str(col) for col in df.columns.tolist()]
+
+
+def find_duplicate_keys(df: pd.DataFrame, key_col: str) -> dict[str, Any]:
+    if key_col not in df.columns:
+        return {"count": 0, "samples": []}
+
+    series = df[key_col]
+    duplicated_mask = series.duplicated(keep=False)
+    duplicated_values = series[duplicated_mask]
+
+    if duplicated_values.empty:
+        return {"count": 0, "samples": []}
+
+    value_counts = duplicated_values.value_counts()
+    unique_dup_count = int(value_counts.shape[0])
+    samples = [
+        {"value": str(val), "count": int(cnt)}
+        for val, cnt in value_counts.head(5).items()
+    ]
+
+    return {"count": unique_dup_count, "samples": samples}
+
+
+def inspect_workbook(
+    content_a: bytes,
+    content_b: bytes,
+    sheet_a: str | int = 0,
+    sheet_b: str | int = 0,
+) -> dict[str, Any]:
+    sheets_a = get_sheet_names(content_a)
+    sheets_b = get_sheet_names(content_b)
+    headers_a = get_headers(content_a, sheet_a)
+    headers_b = get_headers(content_b, sheet_b)
+
+    key_a, key_b = suggest_key_pair(headers_a, headers_b)
+    column_mapping = suggest_column_mapping(
+        headers_a, headers_b, key_a=key_a, key_b=key_b
+    )
+
+    return {
+        "sheets_a": sheets_a,
+        "sheets_b": sheets_b,
+        "headers_a": headers_a,
+        "headers_b": headers_b,
+        "suggestions": {
+            "key_a": key_a,
+            "key_b": key_b,
+            "column_mapping": column_mapping,
+        },
+    }
+
+
+def check_key_duplicates(
+    content_a: bytes,
+    content_b: bytes,
+    sheet_a: str | int,
+    sheet_b: str | int,
+    key_a: str,
+    key_b: str,
+) -> dict[str, Any]:
+    df_a = read_dataframe(content_a, sheet_a)
+    df_b = read_dataframe(content_b, sheet_b)
+
+    dup_a = find_duplicate_keys(df_a, key_a)
+    dup_b = find_duplicate_keys(df_b, key_b)
+
+    warnings: list[str] = []
+    if dup_a["count"] > 0:
+        warnings.append(
+            f"表格 A 的主键列「{key_a}」存在 {dup_a['count']} 个重复值，同步时将保留每个重复值的最后一行。"
+        )
+    if dup_b["count"] > 0:
+        warnings.append(
+            f"表格 B 的主键列「{key_b}」存在 {dup_b['count']} 个重复值，同步结果可能产生多行对应同一主键。"
+        )
+
+    return {
+        "duplicates_a": dup_a,
+        "duplicates_b": dup_b,
+        "warnings": warnings,
+        "has_duplicates": dup_a["count"] > 0 or dup_b["count"] > 0,
+    }
+
+
+def sync_excel(
+    content_a: bytes,
+    content_b: bytes,
+    config: dict[str, Any],
+) -> tuple[bytes, list[str]]:
+    sheet_a = config.get("sheet_a", 0)
+    sheet_b = config.get("sheet_b", 0)
+    key_a = config["key_a"]
+    key_b = config["key_b"]
+    column_mapping = sanitize_column_mapping(
+        config.get("column_mapping", {}),
+        key_a,
+        key_b,
+    )
+
+    df_a = read_dataframe(content_a, sheet_a)
+    df_b = read_dataframe(content_b, sheet_b)
+
+    warnings: list[str] = []
+    dup_info = check_key_duplicates(
+        content_a, content_b, sheet_a, sheet_b, key_a, key_b
+    )
+    warnings.extend(dup_info["warnings"])
+
+    if key_a not in df_a.columns:
+        raise ValueError(f"表格 A 中不存在主键列：{key_a}")
+    if key_b not in df_b.columns:
+        raise ValueError(f"表格 B 中不存在主键列：{key_b}")
+
+    for b_col, a_col in column_mapping.items():
+        if b_col not in df_b.columns:
+            raise ValueError(f"表格 B 中不存在列：{b_col}")
+        if a_col not in df_a.columns:
+            raise ValueError(f"表格 A 中不存在列：{a_col}")
+
+    if not column_mapping:
+        raise ValueError("请至少配置一列需要同步的映射关系")
+
+    # 准备 A 表子集并重命名
+    cols_from_a = [key_a, *column_mapping.values()]
+    df_a_sub = df_a[cols_from_a].copy()
+    rename_map = {key_a: key_b, **{v: k for k, v in column_mapping.items()}}
+    df_a_sub = df_a_sub.rename(columns=rename_map)
+
+    if dup_info["duplicates_a"]["count"] > 0:
+        df_a_sub = df_a_sub.drop_duplicates(subset=[key_b], keep="last")
+
+    merge_cols = [key_b, *column_mapping.keys()]
+    df_a_sub = df_a_sub[merge_cols]
+
+    result = df_b.merge(df_a_sub, on=key_b, how="left", suffixes=("", "_new"))
+
+    for b_col in column_mapping:
+        new_col = f"{b_col}_new"
+        if new_col in result.columns:
+            result[b_col] = result[new_col].combine_first(result[b_col])
+            result.drop(columns=[new_col], inplace=True)
+
+    if config.get("append_new_rows", False):
+        existing_keys = set(result[key_b].dropna())
+        new_rows_data = df_a_sub[~df_a_sub[key_b].isin(existing_keys)]
+
+        if not new_rows_data.empty:
+            append_df = pd.DataFrame(columns=df_b.columns)
+            for col in df_b.columns:
+                if col == key_b:
+                    append_df[col] = new_rows_data[key_b].values
+                elif col in column_mapping:
+                    append_df[col] = new_rows_data[col].values
+                else:
+                    append_df[col] = pd.NA
+
+            result = pd.concat([result, append_df], ignore_index=True)
+            warnings.append(
+                f"已从表格 A 追加 {len(new_rows_data)} 行 B 表中不存在的数据（如新增商品）。"
+            )
+
+    buf = BytesIO()
+    result.to_excel(buf, index=False, engine="openpyxl")
+    buf.seek(0)
+    return buf.getvalue(), warnings
+
+
+def parse_config(config_str: str) -> dict[str, Any]:
+    data = json.loads(config_str)
+    if not data.get("key_a") or not data.get("key_b"):
+        raise ValueError("请配置主键列映射")
+    return data
