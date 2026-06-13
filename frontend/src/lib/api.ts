@@ -93,7 +93,7 @@ export async function syncWorkbooks(
   fileA: File,
   fileB: File,
   config: SyncConfig
-): Promise<{ blob: Blob; warnings: string[] }> {
+): Promise<{ blob: Blob; warnings: string[]; filename: string }> {
   const form = new FormData();
   form.append("file_a", fileA);
   form.append("file_b", fileB);
@@ -110,7 +110,10 @@ export async function syncWorkbooks(
 
   const warningsHeader = response.headers.get("X-Sync-Warnings");
   const warnings = warningsHeader ? JSON.parse(warningsHeader) : [];
+  const disposition = response.headers.get("Content-Disposition");
+  const filenameMatch = disposition?.match(/filename="([^"]+)"/);
+  const filename = filenameMatch?.[1] ?? "updated_table_b.xlsx";
   const blob = await response.blob();
 
-  return { blob, warnings };
+  return { blob, warnings, filename };
 }

@@ -206,7 +206,7 @@ export function SyncTool() {
     setSuccessMessage(null);
 
     try {
-      const { blob, warnings } = await syncWorkbooks(fileA, fileB, {
+      const { blob, warnings, filename } = await syncWorkbooks(fileA, fileB, {
         sheet_a: sheetA,
         sheet_b: sheetB,
         key_a: keyA,
@@ -218,7 +218,7 @@ export function SyncTool() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "updated_table_b.xlsx";
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();

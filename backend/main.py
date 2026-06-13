@@ -101,10 +101,12 @@ async def sync(
         cfg["filename_b"] = file_b.filename
         content_a = await read_file_bytes(file_a)
         content_b = await read_file_bytes(file_b)
-        excel_bytes, warnings = sync_excel(content_a, content_b, cfg)
+        excel_bytes, warnings, media_type, download_name = sync_excel(
+            content_a, content_b, cfg
+        )
 
         headers: dict[str, str] = {
-            "Content-Disposition": 'attachment; filename="updated_table_b.xlsx"',
+            "Content-Disposition": f'attachment; filename="{download_name}"',
         }
         if warnings:
             # HTTP 响应头仅支持 latin-1，中文须转义为 ASCII 安全形式
@@ -112,7 +114,7 @@ async def sync(
 
         return StreamingResponse(
             iter([excel_bytes]),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            media_type=media_type,
             headers=headers,
         )
     except ValueError as exc:

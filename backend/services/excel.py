@@ -1,7 +1,8 @@
 import json
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal
 
+import chardet
 import pandas as pd
 from fastapi import UploadFile
 
@@ -11,27 +12,55 @@ from services.matching import (
     suggest_key_pair,
 )
 
+CSV_SHEET_NAME = "默认"
+FileFormat = Literal["csv", "xlsx", "xls"]
+
 
 async def read_file_bytes(file: UploadFile) -> bytes:
     return await file.read()
 
 
-def detect_excel_engine(content: bytes, filename: str | None = None) -> str:
-    """根据文件名或文件头判断 .xlsx（openpyxl）或 .xls（xlrd）。"""
+def detect_file_format(content: bytes, filename: str | None = None) -> FileFormat:
     if filename:
         lower = filename.lower()
+        if lower.endswith(".csv"):
+            return "csv"
         if lower.endswith(".xls") and not lower.endswith(".xlsx"):
-            return "xlrd"
+            return "xls"
         if lower.endswith((".xlsx", ".xlsm")):
-            return "openpyxl"
+            return "xlsx"
     if content[:2] == b"PK":
-        return "openpyxl"
+        return "xlsx"
     if len(content) >= 8 and content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "xls"
+    return "xlsx"
+
+
+def detect_excel_engine(content: bytes, filename: str | None = None) -> str:
+    fmt = detect_file_format(content, filename)
+    if fmt == "xls":
         return "xlrd"
     return "openpyxl"
 
 
+def _read_csv(content: bytes) -> pd.DataFrame:
+    detected = chardet.detect(content)
+    encoding = detected.get("encoding") or "utf-8"
+
+    for enc in (encoding, "utf-8-sig", "utf-8", "gb18030", "gbk", "latin-1"):
+        if not enc:
+            continue
+        try:
+            return pd.read_csv(BytesIO(content), encoding=enc)
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            continue
+
+    raise ValueError("无法识别 CSV 文件编码，请在 Excel 中另存为 UTF-8 CSV 后重试")
+
+
 def get_sheet_names(content: bytes, filename: str | None = None) -> list[str]:
+    if detect_file_format(content, filename) == "csv":
+        return [CSV_SHEET_NAME]
     engine = detect_excel_engine(content, filename)
     xl = pd.ExcelFile(BytesIO(content), engine=engine)
     return xl.sheet_names
@@ -40,6 +69,8 @@ def get_sheet_names(content: bytes, filename: str | None = None) -> list[str]:
 def read_dataframe(
     content: bytes, sheet_name: str | int, filename: str | None = None
 ) -> pd.DataFrame:
+    if detect_file_format(content, filename) == "csv":
+        return _read_csv(content)
     engine = detect_excel_engine(content, filename)
     return pd.read_excel(BytesIO(content), sheet_name=sheet_name, engine=engine)
 
@@ -49,6 +80,41 @@ def get_headers(
 ) -> list[str]:
     df = read_dataframe(content, sheet_name, filename)
     return [str(col) for col in df.columns.tolist()]
+
+
+def _output_stem(filename: str | None, default: str = "updated_table_b") -> str:
+    if not filename:
+        return default
+    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return stem or default
+
+
+def write_result(
+    result: pd.DataFrame, filename_b: str | None = None
+) -> tuple[bytes, str, str]:
+    """返回 (文件字节, MIME 类型, 下载文件名)。"""
+    if filename_b and filename_b.lower().endswith(".csv"):
+        buf = BytesIO()
+        result.to_csv(buf, index=False, encoding="utf-8-sig")
+        buf.seek(0)
+        download_name = f"{_output_stem(filename_b)}_updated.csv"
+        return buf.getvalue(), "text/csv; charset=utf-8", download_name
+
+    buf = BytesIO()
+    result.to_excel(buf, index=False, engine="openpyxl")
+    buf.seek(0)
+    if filename_b and filename_b.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        ext = ".xlsx" if filename_b.lower().endswith(".xls") else "." + filename_b.rsplit(".", 1)[-1]
+        if filename_b.lower().endswith(".xls") and not filename_b.lower().endswith(".xlsx"):
+            ext = ".xlsx"
+        download_name = f"{_output_stem(filename_b)}_updated{ext}"
+    else:
+        download_name = "updated_table_b.xlsx"
+    return (
+        buf.getvalue(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        download_name,
+    )
 
 
 def find_duplicate_keys(df: pd.DataFrame, key_col: str) -> dict[str, Any]:
@@ -141,7 +207,7 @@ def sync_excel(
     content_a: bytes,
     content_b: bytes,
     config: dict[str, Any],
-) -> tuple[bytes, list[str]]:
+) -> tuple[bytes, list[str], str, str]:
     sheet_a = config.get("sheet_a", 0)
     sheet_b = config.get("sheet_b", 0)
     key_a = config["key_a"]
@@ -184,7 +250,6 @@ def sync_excel(
     if not column_mapping:
         raise ValueError("请至少配置一列需要同步的映射关系")
 
-    # 准备 A 表子集并重命名
     cols_from_a = [key_a, *column_mapping.values()]
     df_a_sub = df_a[cols_from_a].copy()
     rename_map = {key_a: key_b, **{v: k for k, v in column_mapping.items()}}
@@ -223,10 +288,8 @@ def sync_excel(
                 f"已从表格 A 追加 {len(new_rows_data)} 行 B 表中不存在的数据（如新增商品）。"
             )
 
-    buf = BytesIO()
-    result.to_excel(buf, index=False, engine="openpyxl")
-    buf.seek(0)
-    return buf.getvalue(), warnings
+    file_bytes, media_type, download_name = write_result(result, filename_b)
+    return file_bytes, warnings, media_type, download_name
 
 
 def parse_config(config_str: str) -> dict[str, Any]:

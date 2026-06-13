@@ -26,8 +26,8 @@ export function FileUploadZone({
     (files: FileList | null) => {
       const selected = files?.[0];
       if (!selected) return;
-      if (!selected.name.match(/\.xlsx?$/i)) {
-        alert("请上传 .xlsx 或 .xls 格式的 Excel 文件");
+      if (!selected.name.match(/\.(xlsx|xls|csv)$/i)) {
+        alert("请上传 .xlsx、.xls 或 .csv 格式的表格文件");
         return;
       }
       onFileChange(selected);
@@ -59,7 +59,7 @@ export function FileUploadZone({
     >
       <input
         type="file"
-        accept=".xlsx,.xls"
+        accept=".xlsx,.xls,.csv"
         className="absolute inset-0 cursor-pointer opacity-0"
         onChange={(e) => handleFiles(e.target.files)}
       />
