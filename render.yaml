@@ -1,0 +1,31 @@
+# Render 一键部署：前后端自动配置，无需分两个平台
+# 部署链接: https://dashboard.render.com/blueprint/new?repo=https://github.com/haoningyou-create/excel-sync-tool
+
+services:
+  - type: web
+    name: excel-sync-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+  - type: web
+    name: excel-sync-frontend
+    runtime: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: excel-sync-backend
+          envVarKey: RENDER_EXTERNAL_URL

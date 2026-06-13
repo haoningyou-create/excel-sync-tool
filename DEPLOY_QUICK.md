@@ -1,44 +1,35 @@
-# 部署说明 — 仓库已就绪
+# 最简单：Render 一键部署（推荐）
 
-## 代码地址
+## 只需 3 步
 
-https://github.com/haoningyou-create/excel-sync-tool
+### 1. 打开这个链接
 
-## 最快部署（约 5 分钟）
+**https://dashboard.render.com/blueprint/new?repo=https://github.com/haoningyou-create/excel-sync-tool**
 
-在 Mac 终端运行：
+（Mac 终端也可运行：`open "https://dashboard.render.com/blueprint/new?repo=https://github.com/haoningyou-create/excel-sync-tool"`）
 
-```bash
-cd "/Users/nathan/Documents/表格同步网站"
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
-```
+### 2. 用 GitHub 登录 Render
 
-脚本会打开 Railway 和 Vercel 页面，按提示操作即可。
+- 第一次使用需要注册 Render（免费）
+- 点击 **Connect GitHub**，授权访问仓库 `excel-sync-tool`
+- 页面会显示 2 个服务（backend + frontend），直接点 **Apply** 或 **Deploy Blueprint**
 
-## 手动部署
+### 3. 等待约 5–10 分钟
 
-见 [DEPLOY.md](./DEPLOY.md)
+- 部署完成后，在 Render 控制台找到 **excel-sync-frontend**
+- 复制它的地址，形如：`https://excel-sync-frontend.onrender.com`
+- **把这个链接发给同事即可**
 
-## 一键导入链接
+---
 
-| 平台 | 链接 |
-|------|------|
-| **Vercel 导入** | https://vercel.com/new/import?s=https://github.com/haoningyou-create/excel-sync-tool |
-| **Railway 新建** | https://railway.com/new/github |
+## 注意事项
 
-### Railway 必设项
+- **免费版**长时间不用会休眠，第一次打开要等 30–60 秒唤醒
+- 后端地址会自动配好，**不用手动填环境变量**
+- 示例 Excel 在 GitHub 仓库的 `samples/` 目录
 
-- Root Directory: `backend`
-- Generate Domain 后得到后端 URL
+---
 
-### Vercel 必设项
+## 其他部署方式
 
-- Root Directory: `frontend`
-- 环境变量: `NEXT_PUBLIC_API_URL` = Railway 后端地址
-
-### Railway 环境变量（Vercel 部署后）
-
-```
-ALLOWED_ORIGINS=https://你的项目.vercel.app,http://localhost:3000
-```
+见 [DEPLOY.md](./DEPLOY.md)（Vercel + Railway，需分两步配置）

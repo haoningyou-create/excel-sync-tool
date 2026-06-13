@@ -22,13 +22,18 @@ _allowed_origins = [
     if origin.strip()
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_kwargs: dict = {
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+    "allow_origins": _allowed_origins,
+}
+
+# Render 部署：自动允许 *.onrender.com 前端访问后端
+if os.getenv("RENDER"):
+    _cors_kwargs["allow_origin_regex"] = r"https://.*\.onrender\.com"
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 
 @app.get("/api/health")
