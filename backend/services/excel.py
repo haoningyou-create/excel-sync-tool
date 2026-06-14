@@ -43,7 +43,7 @@ def detect_excel_engine(content: bytes, filename: str | None = None) -> str:
     return "openpyxl"
 
 
-def _read_csv(content: bytes) -> pd.DataFrame:
+def _read_csv(content: bytes, header_row: int = 0) -> pd.DataFrame:
     detected = chardet.detect(content)
     encoding = detected.get("encoding") or "utf-8"
 
@@ -51,11 +51,84 @@ def _read_csv(content: bytes) -> pd.DataFrame:
         if not enc:
             continue
         try:
-            return pd.read_csv(BytesIO(content), encoding=enc)
+            return pd.read_csv(BytesIO(content), encoding=enc, header=header_row)
         except (UnicodeDecodeError, pd.errors.ParserError):
             continue
 
     raise ValueError("无法识别 CSV 文件编码，请在 Excel 中另存为 UTF-8 CSV 后重试")
+
+
+def _read_raw_rows(
+    content: bytes,
+    sheet_name: str | int,
+    filename: str | None,
+    nrows: int = 15,
+) -> pd.DataFrame:
+    if detect_file_format(content, filename) == "csv":
+        detected = chardet.detect(content)
+        encoding = detected.get("encoding") or "utf-8"
+        for enc in (encoding, "utf-8-sig", "utf-8", "gb18030", "gbk"):
+            if not enc:
+                continue
+            try:
+                return pd.read_csv(
+                    BytesIO(content), encoding=enc, header=None, nrows=nrows
+                )
+            except (UnicodeDecodeError, pd.errors.ParserError):
+                continue
+        return pd.read_csv(BytesIO(content), header=None, nrows=nrows)
+
+    engine = detect_excel_engine(content, filename)
+    return pd.read_excel(
+        BytesIO(content),
+        sheet_name=sheet_name,
+        engine=engine,
+        header=None,
+        nrows=nrows,
+    )
+
+
+def _score_header_candidate(row: pd.Series) -> float:
+    filled = 0
+    for val in row:
+        if pd.isna(val):
+            continue
+        text = str(val).strip()
+        if not text or text.lower().startswith("unnamed"):
+            continue
+        filled += 1
+    if filled < 2:
+        return filled - 20
+    return float(filled)
+
+
+def detect_header_row(
+    content: bytes,
+    sheet_name: str | int = 0,
+    filename: str | None = None,
+    max_scan: int = 15,
+) -> int:
+    """检测表头所在行，返回 1-based 行号。"""
+    raw = _read_raw_rows(content, sheet_name, filename, nrows=max_scan)
+    if raw.empty:
+        return 1
+
+    best_row = 0
+    best_score = float("-inf")
+    for i in range(len(raw)):
+        score = _score_header_candidate(raw.iloc[i])
+        if score > best_score:
+            best_score = score
+            best_row = i
+
+    return best_row + 1
+
+
+def _unnamed_ratio(headers: list[str]) -> float:
+    if not headers:
+        return 1.0
+    unnamed = sum(1 for h in headers if str(h).startswith("Unnamed"))
+    return unnamed / len(headers)
 
 
 def get_sheet_names(content: bytes, filename: str | None = None) -> list[str]:
@@ -67,18 +140,36 @@ def get_sheet_names(content: bytes, filename: str | None = None) -> list[str]:
 
 
 def read_dataframe(
-    content: bytes, sheet_name: str | int, filename: str | None = None
+    content: bytes,
+    sheet_name: str | int,
+    filename: str | None = None,
+    header_row: int | None = None,
 ) -> pd.DataFrame:
+    row = header_row
+    if row is None or row < 1:
+        row = detect_header_row(content, sheet_name, filename)
+
+    header_idx = row - 1
+
     if detect_file_format(content, filename) == "csv":
-        return _read_csv(content)
+        return _read_csv(content, header_idx)
+
     engine = detect_excel_engine(content, filename)
-    return pd.read_excel(BytesIO(content), sheet_name=sheet_name, engine=engine)
+    return pd.read_excel(
+        BytesIO(content),
+        sheet_name=sheet_name,
+        engine=engine,
+        header=header_idx,
+    )
 
 
 def get_headers(
-    content: bytes, sheet_name: str | int, filename: str | None = None
+    content: bytes,
+    sheet_name: str | int,
+    filename: str | None = None,
+    header_row: int | None = None,
 ) -> list[str]:
-    df = read_dataframe(content, sheet_name, filename)
+    df = read_dataframe(content, sheet_name, filename, header_row)
     return [str(col) for col in df.columns.tolist()]
 
 
@@ -145,22 +236,45 @@ def inspect_workbook(
     sheet_b: str | int = 0,
     filename_a: str | None = None,
     filename_b: str | None = None,
+    header_row_a: int | None = None,
+    header_row_b: int | None = None,
 ) -> dict[str, Any]:
     sheets_a = get_sheet_names(content_a, filename_a)
     sheets_b = get_sheet_names(content_b, filename_b)
-    headers_a = get_headers(content_a, sheet_a, filename_a)
-    headers_b = get_headers(content_b, sheet_b, filename_b)
+
+    detected_a = detect_header_row(content_a, sheet_a, filename_a)
+    detected_b = detect_header_row(content_b, sheet_b, filename_b)
+    row_a = header_row_a if header_row_a and header_row_a >= 1 else detected_a
+    row_b = header_row_b if header_row_b and header_row_b >= 1 else detected_b
+
+    headers_a = get_headers(content_a, sheet_a, filename_a, row_a)
+    headers_b = get_headers(content_b, sheet_b, filename_b, row_b)
 
     key_a, key_b = suggest_key_pair(headers_a, headers_b)
     column_mapping = suggest_column_mapping(
         headers_a, headers_b, key_a=key_a, key_b=key_b
     )
 
+    warnings: list[str] = []
+    if _unnamed_ratio(headers_a) > 0.3:
+        warnings.append(
+            f"表格 A 仍有较多 Unnamed 列，请尝试调整「表头所在行」（当前第 {row_a} 行）。"
+        )
+    if _unnamed_ratio(headers_b) > 0.3:
+        warnings.append(
+            f"表格 B 仍有较多 Unnamed 列，请尝试调整「表头所在行」（当前第 {row_b} 行）。"
+        )
+
     return {
         "sheets_a": sheets_a,
         "sheets_b": sheets_b,
         "headers_a": headers_a,
         "headers_b": headers_b,
+        "header_row_a": row_a,
+        "header_row_b": row_b,
+        "detected_header_row_a": detected_a,
+        "detected_header_row_b": detected_b,
+        "warnings": warnings,
         "suggestions": {
             "key_a": key_a,
             "key_b": key_b,
@@ -178,9 +292,11 @@ def check_key_duplicates(
     key_b: str,
     filename_a: str | None = None,
     filename_b: str | None = None,
+    header_row_a: int | None = None,
+    header_row_b: int | None = None,
 ) -> dict[str, Any]:
-    df_a = read_dataframe(content_a, sheet_a, filename_a)
-    df_b = read_dataframe(content_b, sheet_b, filename_b)
+    df_a = read_dataframe(content_a, sheet_a, filename_a, header_row_a)
+    df_b = read_dataframe(content_b, sheet_b, filename_b, header_row_b)
 
     dup_a = find_duplicate_keys(df_a, key_a)
     dup_b = find_duplicate_keys(df_b, key_b)
@@ -214,14 +330,16 @@ def sync_excel(
     key_b = config["key_b"]
     filename_a = config.get("filename_a")
     filename_b = config.get("filename_b")
+    header_row_a = config.get("header_row_a")
+    header_row_b = config.get("header_row_b")
     column_mapping = sanitize_column_mapping(
         config.get("column_mapping", {}),
         key_a,
         key_b,
     )
 
-    df_a = read_dataframe(content_a, sheet_a, filename_a)
-    df_b = read_dataframe(content_b, sheet_b, filename_b)
+    df_a = read_dataframe(content_a, sheet_a, filename_a, header_row_a)
+    df_b = read_dataframe(content_b, sheet_b, filename_b, header_row_b)
 
     warnings: list[str] = []
     dup_info = check_key_duplicates(
@@ -233,6 +351,8 @@ def sync_excel(
         key_b,
         filename_a,
         filename_b,
+        header_row_a,
+        header_row_b,
     )
     warnings.extend(dup_info["warnings"])
 

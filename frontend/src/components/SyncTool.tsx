@@ -45,6 +45,9 @@ export function SyncTool() {
   const [fileB, setFileB] = useState<File | null>(null);
   const [sheetA, setSheetA] = useState<string>("0");
   const [sheetB, setSheetB] = useState<string>("0");
+  const [headerRowA, setHeaderRowA] = useState(0);
+  const [headerRowB, setHeaderRowB] = useState(0);
+  const [inspectWarnings, setInspectWarnings] = useState<string[]>([]);
   const [sheetsA, setSheetsA] = useState<string[]>([]);
   const [sheetsB, setSheetsB] = useState<string[]>([]);
   const [headersA, setHeadersA] = useState<string[]>([]);
@@ -86,7 +89,14 @@ export function SyncTool() {
     setSuccessMessage(null);
 
     try {
-      let result = await inspectWorkbooks(fileA, fileB, sheetA, sheetB);
+      let result = await inspectWorkbooks(
+        fileA,
+        fileB,
+        sheetA,
+        sheetB,
+        headerRowA,
+        headerRowB
+      );
 
       const resolvedSheetA = result.sheets_a.includes(sheetA)
         ? sheetA
@@ -96,7 +106,14 @@ export function SyncTool() {
         : (result.sheets_b[0] ?? "0");
 
       if (resolvedSheetA !== sheetA || resolvedSheetB !== sheetB) {
-        result = await inspectWorkbooks(fileA, fileB, resolvedSheetA, resolvedSheetB);
+        result = await inspectWorkbooks(
+          fileA,
+          fileB,
+          resolvedSheetA,
+          resolvedSheetB,
+          headerRowA,
+          headerRowB
+        );
         setSheetA(resolvedSheetA);
         setSheetB(resolvedSheetB);
       }
@@ -105,6 +122,9 @@ export function SyncTool() {
       setSheetsB(result.sheets_b);
       setHeadersA(result.headers_a);
       setHeadersB(result.headers_b);
+      setHeaderRowA(result.header_row_a);
+      setHeaderRowB(result.header_row_b);
+      setInspectWarnings(result.warnings ?? []);
 
       const { suggestions } = result;
       setKeyA(suggestions.key_a ?? "");
@@ -129,7 +149,7 @@ export function SyncTool() {
     } finally {
       setLoadingInspect(false);
     }
-  }, [fileA, fileB, sheetA, sheetB]);
+  }, [fileA, fileB, sheetA, sheetB, headerRowA, headerRowB]);
 
   useEffect(() => {
     if (fileA && fileB) {
@@ -139,12 +159,15 @@ export function SyncTool() {
       setSheetsB([]);
       setHeadersA([]);
       setHeadersB([]);
+      setHeaderRowA(0);
+      setHeaderRowB(0);
+      setInspectWarnings([]);
       setKeyA("");
       setKeyB("");
       setColumnMapping({});
       setDuplicateInfo(null);
     }
-  }, [fileA, fileB, sheetA, sheetB, loadInspect]);
+  }, [fileA, fileB, sheetA, sheetB, headerRowA, headerRowB, loadInspect]);
 
   useEffect(() => {
     if (!keyA && !keyB) return;
@@ -159,7 +182,16 @@ export function SyncTool() {
       }
 
       try {
-        const result = await checkDuplicates(fileA, fileB, keyA, keyB, sheetA, sheetB);
+        const result = await checkDuplicates(
+          fileA,
+          fileB,
+          keyA,
+          keyB,
+          sheetA,
+          sheetB,
+          headerRowA,
+          headerRowB
+        );
         setDuplicateInfo(result);
       } catch {
         setDuplicateInfo(null);
@@ -167,7 +199,7 @@ export function SyncTool() {
     };
 
     void runCheck();
-  }, [fileA, fileB, keyA, keyB, sheetA, sheetB]);
+  }, [fileA, fileB, keyA, keyB, sheetA, sheetB, headerRowA, headerRowB]);
 
   const handleMappingChange = (bCol: string, aCol: string) => {
     setColumnMapping((prev) => {
@@ -209,6 +241,8 @@ export function SyncTool() {
       const { blob, warnings, filename } = await syncWorkbooks(fileA, fileB, {
         sheet_a: sheetA,
         sheet_b: sheetB,
+        header_row_a: headerRowA,
+        header_row_b: headerRowB,
         key_a: keyA,
         key_b: keyB,
         column_mapping: syncColumnMapping,
@@ -261,9 +295,9 @@ export function SyncTool() {
       {fileA && fileB && (
         <Card>
           <CardHeader>
-            <CardTitle>工作表选择</CardTitle>
+            <CardTitle>工作表与表头</CardTitle>
             <CardDescription>
-              如果 Excel 包含多个工作表，请分别为 A、B 表选择要同步的 Sheet
+              若列名显示为 Unnamed，说明表头不在第 1 行（常见于顶部有标题行的报表），请调整「表头所在行」
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
@@ -274,12 +308,24 @@ export function SyncTool() {
                 onChange={(e) => setSheetA(e.target.value)}
                 disabled={loadingInspect}
               >
-                {sheetsA.map((name, index) => (
+                {sheetsA.map((name) => (
                   <option key={name} value={name}>
                     {name}
                   </option>
                 ))}
                 {sheetsA.length === 0 && <option value="0">默认工作表</option>}
+              </Select>
+              <label className="text-sm font-medium text-slate-700">表头所在行（A）</label>
+              <Select
+                value={String(headerRowA || 1)}
+                onChange={(e) => setHeaderRowA(Number(e.target.value))}
+                disabled={loadingInspect}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                  <option key={n} value={n}>
+                    第 {n} 行
+                  </option>
+                ))}
               </Select>
             </div>
             <div className="space-y-2">
@@ -296,6 +342,18 @@ export function SyncTool() {
                 ))}
                 {sheetsB.length === 0 && <option value="0">默认工作表</option>}
               </Select>
+              <label className="text-sm font-medium text-slate-700">表头所在行（B）</label>
+              <Select
+                value={String(headerRowB || 1)}
+                onChange={(e) => setHeaderRowB(Number(e.target.value))}
+                disabled={loadingInspect}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                  <option key={n} value={n}>
+                    第 {n} 行
+                  </option>
+                ))}
+              </Select>
             </div>
           </CardContent>
         </Card>
@@ -307,6 +365,14 @@ export function SyncTool() {
             <Loader2 className="h-4 w-4 animate-spin" />
             正在读取表头并生成智能映射建议...
           </div>
+        </Alert>
+      )}
+
+      {inspectWarnings.length > 0 && (
+        <Alert variant="warning">
+          {inspectWarnings.map((w) => (
+            <p key={w}>{w}</p>
+          ))}
         </Alert>
       )}
 

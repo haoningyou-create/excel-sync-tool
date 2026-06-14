@@ -5,6 +5,11 @@ export type InspectResponse = {
   sheets_b: string[];
   headers_a: string[];
   headers_b: string[];
+  header_row_a: number;
+  header_row_b: number;
+  detected_header_row_a: number;
+  detected_header_row_b: number;
+  warnings: string[];
   suggestions: {
     key_a: string | null;
     key_b: string | null;
@@ -22,6 +27,8 @@ export type DuplicateCheckResponse = {
 export type SyncConfig = {
   sheet_a: string | number;
   sheet_b: string | number;
+  header_row_a: number;
+  header_row_b: number;
   key_a: string;
   key_b: string;
   column_mapping: Record<string, string>;
@@ -41,13 +48,17 @@ export async function inspectWorkbooks(
   fileA: File,
   fileB: File,
   sheetA: string | number,
-  sheetB: string | number
+  sheetB: string | number,
+  headerRowA = 0,
+  headerRowB = 0
 ): Promise<InspectResponse> {
   const form = new FormData();
   form.append("file_a", fileA);
   form.append("file_b", fileB);
   form.append("sheet_a", String(sheetA));
   form.append("sheet_b", String(sheetB));
+  form.append("header_row_a", String(headerRowA));
+  form.append("header_row_b", String(headerRowB));
 
   const response = await fetch(`${API_BASE}/api/inspect`, {
     method: "POST",
@@ -67,7 +78,9 @@ export async function checkDuplicates(
   keyA: string,
   keyB: string,
   sheetA: string | number,
-  sheetB: string | number
+  sheetB: string | number,
+  headerRowA = 0,
+  headerRowB = 0
 ): Promise<DuplicateCheckResponse> {
   const form = new FormData();
   form.append("file_a", fileA);
@@ -76,6 +89,8 @@ export async function checkDuplicates(
   form.append("key_b", keyB);
   form.append("sheet_a", String(sheetA));
   form.append("sheet_b", String(sheetB));
+  form.append("header_row_a", String(headerRowA));
+  form.append("header_row_b", String(headerRowB));
 
   const response = await fetch(`${API_BASE}/api/check-duplicates`, {
     method: "POST",

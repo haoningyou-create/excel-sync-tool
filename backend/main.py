@@ -38,7 +38,7 @@ app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.3.0"}
+    return {"status": "ok", "version": "1.4.0"}
 
 
 @app.post("/api/inspect")
@@ -47,15 +47,25 @@ async def inspect(
     file_b: UploadFile = File(..., description="表格 B（目标）"),
     sheet_a: str = Form("0"),
     sheet_b: str = Form("0"),
+    header_row_a: str = Form("0"),
+    header_row_b: str = Form("0"),
 ):
     try:
         content_a = await read_file_bytes(file_a)
         content_b = await read_file_bytes(file_b)
         sheet_a_val: str | int = int(sheet_a) if sheet_a.isdigit() else sheet_a
         sheet_b_val: str | int = int(sheet_b) if sheet_b.isdigit() else sheet_b
+        h_a = int(header_row_a) if header_row_a.isdigit() and int(header_row_a) > 0 else None
+        h_b = int(header_row_b) if header_row_b.isdigit() and int(header_row_b) > 0 else None
         return inspect_workbook(
-            content_a, content_b, sheet_a_val, sheet_b_val,
-            file_a.filename, file_b.filename,
+            content_a,
+            content_b,
+            sheet_a_val,
+            sheet_b_val,
+            file_a.filename,
+            file_b.filename,
+            h_a,
+            h_b,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -69,12 +79,16 @@ async def check_duplicates(
     key_b: str = Form(...),
     sheet_a: str = Form("0"),
     sheet_b: str = Form("0"),
+    header_row_a: str = Form("0"),
+    header_row_b: str = Form("0"),
 ):
     try:
         content_a = await read_file_bytes(file_a)
         content_b = await read_file_bytes(file_b)
         sheet_a_val: str | int = int(sheet_a) if sheet_a.isdigit() else sheet_a
         sheet_b_val: str | int = int(sheet_b) if sheet_b.isdigit() else sheet_b
+        h_a = int(header_row_a) if header_row_a.isdigit() and int(header_row_a) > 0 else None
+        h_b = int(header_row_b) if header_row_b.isdigit() and int(header_row_b) > 0 else None
         return check_key_duplicates(
             content_a,
             content_b,
@@ -84,6 +98,8 @@ async def check_duplicates(
             key_b,
             file_a.filename,
             file_b.filename,
+            h_a,
+            h_b,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
