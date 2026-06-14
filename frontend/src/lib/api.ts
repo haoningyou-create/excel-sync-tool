@@ -125,9 +125,15 @@ export async function syncWorkbooks(
 
   const warningsHeader = response.headers.get("X-Sync-Warnings");
   const warnings = warningsHeader ? JSON.parse(warningsHeader) : [];
+  const downloadFilenameHeader = response.headers.get("X-Download-Filename");
   const disposition = response.headers.get("Content-Disposition");
-  const filenameMatch = disposition?.match(/filename="([^"]+)"/);
-  const filename = filenameMatch?.[1] ?? "updated_table_b.xlsx";
+  const filenameMatch = disposition?.match(/filename\*=UTF-8''([^;]+)/i)
+    ?? disposition?.match(/filename="([^"]+)"/);
+  const filename = downloadFilenameHeader
+    ? JSON.parse(downloadFilenameHeader)
+    : filenameMatch?.[1]
+      ? decodeURIComponent(filenameMatch[1])
+      : "updated_table_b.xlsx";
   const blob = await response.blob();
 
   return { blob, warnings, filename };

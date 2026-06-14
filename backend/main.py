@@ -1,5 +1,6 @@
 import json
 import os
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +28,7 @@ _cors_kwargs: dict = {
     "allow_methods": ["*"],
     "allow_headers": ["*"],
     "allow_origins": _allowed_origins,
+    "expose_headers": ["X-Sync-Warnings", "X-Download-Filename"],
 }
 
 # Render 部署：自动允许 *.onrender.com 前端访问后端
@@ -34,6 +36,19 @@ if os.getenv("RENDER"):
     _cors_kwargs["allow_origin_regex"] = r"https://.*\.onrender\.com"
 
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
+
+
+def _content_disposition(download_name: str) -> str:
+    """HTTP 响应头仅支持 latin-1，中文文件名用 RFC 5987 filename* 或 ASCII 回退。"""
+    ascii_name = "updated_table_b.xlsx"
+    if download_name.lower().endswith(".csv"):
+        ascii_name = "updated_table_b.csv"
+    try:
+        download_name.encode("latin-1")
+        return f'attachment; filename="{download_name}"'
+    except UnicodeEncodeError:
+        encoded = quote(download_name, safe="")
+        return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 
 
 @app.get("/api/health")
@@ -122,7 +137,8 @@ async def sync(
         )
 
         headers: dict[str, str] = {
-            "Content-Disposition": f'attachment; filename="{download_name}"',
+            "Content-Disposition": _content_disposition(download_name),
+            "X-Download-Filename": json.dumps(download_name, ensure_ascii=True),
         }
         if warnings:
             # HTTP 响应头仅支持 latin-1，中文须转义为 ASCII 安全形式
