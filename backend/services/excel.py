@@ -7,6 +7,7 @@ import pandas as pd
 from fastapi import UploadFile
 
 from services.matching import (
+    is_preserve_column,
     sanitize_column_mapping,
     suggest_column_mapping,
     suggest_key_pair,
@@ -208,6 +209,25 @@ def write_result(
     )
 
 
+def finalize_result_columns(result: pd.DataFrame, df_b: pd.DataFrame) -> pd.DataFrame:
+    """合并重复备注列，并保证备注类列只保留一列且位于最后。"""
+    remark_cols = [col for col in result.columns if is_preserve_column(col)]
+
+    if len(remark_cols) > 1:
+        primary = next((col for col in df_b.columns if col in remark_cols), remark_cols[0])
+        for extra in remark_cols:
+            if extra == primary:
+                continue
+            result[primary] = result[primary].combine_first(result[extra])
+        result = result.drop(columns=[col for col in remark_cols if col != primary])
+
+    remark_cols = [col for col in result.columns if is_preserve_column(col)]
+    base_order = [col for col in df_b.columns if col in result.columns and col not in remark_cols]
+    extras = [col for col in result.columns if col not in base_order and col not in remark_cols]
+    ordered = base_order + extras + remark_cols
+    return result[ordered]
+
+
 def find_duplicate_keys(df: pd.DataFrame, key_col: str) -> dict[str, Any]:
     if key_col not in df.columns:
         return {"count": 0, "samples": []}
@@ -407,6 +427,8 @@ def sync_excel(
             warnings.append(
                 f"已从表格 A 追加 {len(new_rows_data)} 行 B 表中不存在的数据（如新增商品）。"
             )
+
+    result = finalize_result_columns(result, df_b)
 
     file_bytes, media_type, download_name = write_result(result, filename_b)
     return file_bytes, warnings, media_type, download_name

@@ -28,6 +28,13 @@ import {
 
 const EMPTY_OPTION = "__none__";
 
+const PRESERVE_COLUMN_KEYWORDS = ["备注", "remark", "note", "说明", "注释", "comment", "memo"];
+
+function isPreserveColumn(col: string): boolean {
+  const lower = col.trim().toLowerCase();
+  return PRESERVE_COLUMN_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
 function sanitizeColumnMapping(
   mapping: Record<string, string>,
   keyA: string,
@@ -35,7 +42,8 @@ function sanitizeColumnMapping(
 ): Record<string, string> {
   return Object.fromEntries(
     Object.entries(mapping).filter(
-      ([bCol, aCol]) => bCol !== keyB && aCol !== keyA
+      ([bCol, aCol]) =>
+        bCol !== keyB && aCol !== keyA && !isPreserveColumn(bCol)
     )
   );
 }
@@ -76,8 +84,13 @@ export function SyncTool() {
     [syncColumnMapping]
   );
 
+  const preserveHeadersB = useMemo(
+    () => headersB.filter((col) => col !== keyB && isPreserveColumn(col)),
+    [headersB, keyB]
+  );
+
   const mappableHeadersB = useMemo(
-    () => headersB.filter((col) => col !== keyB),
+    () => headersB.filter((col) => col !== keyB && !isPreserveColumn(col)),
     [headersB, keyB]
   );
 
@@ -489,7 +502,7 @@ export function SyncTool() {
             <div>
               <h2 className="text-2xl font-semibold text-slate-900">列映射配置</h2>
               <p className="mt-1 text-sm text-slate-500">
-                左侧为表格 B 的目标列，右侧选择表格 A 中用于更新的源列。主键列已通过上方关联匹配，无需在此重复配置。
+                左侧为表格 B 的目标列，右侧选择表格 A 中用于更新的源列。主键列与「备注」类列默认不参与同步。
               </p>
             </div>
 
@@ -522,6 +535,19 @@ export function SyncTool() {
                           </td>
                         </tr>
                       )}
+                      {preserveHeadersB.map((bCol) => (
+                        <tr key={bCol} className="border-b border-slate-100 bg-amber-50/40">
+                          <td className="px-6 py-4 font-medium text-slate-900">
+                            {bCol}
+                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-normal text-amber-800">
+                              保留原值
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-500">
+                            不参与同步，导出时保留 B 表原备注且仅保留一列
+                          </td>
+                        </tr>
+                      ))}
                       {mappableHeadersB.map((bCol) => (
                         <tr key={bCol} className="border-b border-slate-100 last:border-0">
                           <td className="px-6 py-4 font-medium text-slate-900">{bCol}</td>

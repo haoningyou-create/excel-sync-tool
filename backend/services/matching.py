@@ -5,16 +5,25 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
 
 
+PRESERVE_COLUMN_KEYWORDS = ("备注", "remark", "note", "说明", "注释", "comment", "memo")
+
+
+def is_preserve_column(col: str) -> bool:
+    """备注类列默认保留 B 表原值，不从 A 表覆盖。"""
+    lower = str(col).strip().lower()
+    return any(keyword in lower for keyword in PRESERVE_COLUMN_KEYWORDS)
+
+
 def sanitize_column_mapping(
     column_mapping: dict[str, str],
     key_a: str,
     key_b: str,
 ) -> dict[str, str]:
-    """排除主键列，避免与行匹配逻辑重复导致列名冲突。"""
+    """排除主键列与备注类列，避免重复覆盖或列名冲突。"""
     return {
         b_col: a_col
         for b_col, a_col in column_mapping.items()
-        if b_col != key_b and a_col != key_a
+        if b_col != key_b and a_col != key_a and not is_preserve_column(b_col)
     }
 
 
@@ -32,7 +41,7 @@ def suggest_column_mapping(
         used_a.add(key_a)
 
     for b_col in headers_b:
-        if b_col == key_b:
+        if b_col == key_b or is_preserve_column(b_col):
             mapping[b_col] = None
             continue
 
